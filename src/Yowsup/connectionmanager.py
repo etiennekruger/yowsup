@@ -1334,7 +1334,7 @@ class ReaderThread(threading.Thread):
 
 
 			if msgData:
-				msgData = msgData.encode('latin-1').decode()
+				msgData = msgData.decode("utf-8")
 				if isGroup:
 					self.signalInterface.send("group_messageReceived", (msgId, fromAttribute, author, msgData, timestamp, wantsReceipt, pushName))
 
