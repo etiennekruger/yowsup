@@ -35,6 +35,7 @@ import socket
 import hashlib
 import base64
 import sys
+import binascii
 
 
 
@@ -1206,7 +1207,17 @@ class ReaderThread(threading.Thread):
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
-							mediaPreview = base64.b64encode(mediaPreview.encode('latin-1')).decode()
+                                                    try:
+                                                        mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
+                                                    except UnicodeDecodeError:
+                                                        try:
+                                                            hexa = binascii.hexlify(mediaPreview)
+                                                            print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                            mediaPreview = base64.b64encode(mediaPreview)
+                                                        except UnicodeDecodeError:
+                                                            hexa = binascii.hexlify(mediaPreview)
+                                                            print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                            raise
 
 						if isGroup:
 							self.signalInterface.send("group_imageReceived", (msgId, fromAttribute, author, mediaPreview, mediaUrl, mediaSize, wantsReceipt))
@@ -1217,7 +1228,17 @@ class ReaderThread(threading.Thread):
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
-							mediaPreview = base64.b64encode(mediaPreview.encode('latin-1')).decode()
+                                                    try:
+                                                        mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
+                                                    except UnicodeDecodeError:
+                                                        try:
+                                                            hexa = binascii.hexlify(mediaPreview)
+                                                            print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                            mediaPreview = base64.b64encode(mediaPreview)
+                                                        except UnicodeDecodeError:
+                                                            hexa = binascii.hexlify(mediaPreview)
+                                                            print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                            raise
 
 						if isGroup:
 							self.signalInterface.send("group_videoReceived", (msgId, fromAttribute, author, mediaPreview, mediaUrl, mediaSize, wantsReceipt))
