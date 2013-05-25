@@ -1264,7 +1264,17 @@ class ReaderThread(threading.Thread):
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
-							mediaPreview = base64.b64encode(mediaPreview.encode('latin-1')).decode()
+                                                        try:
+                                                            mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
+                                                        except UnicodeDecodeError:
+                                                            try:
+                                                                hexa = binascii.hexlify(mediaPreview)
+                                                                print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                                mediaPreview = base64.b64encode(mediaPreview)
+                                                            except UnicodeDecodeError:
+                                                                hexa = binascii.hexlify(mediaPreview)
+                                                                print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                                                raise
 
 						if isGroup:
 							self.signalInterface.send("group_locationReceived", (msgId, fromAttribute, author, name or "", mediaPreview, mlatitude, mlongitude, wantsReceipt))
