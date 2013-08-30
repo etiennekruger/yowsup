@@ -1175,7 +1175,19 @@ class ReaderThread(threading.Thread):
 					receiptRequested = True;
 
 			bodyNode = messageNode.getChild("body");
-			newSubject = None if bodyNode is None else bodyNode.data.encode('latin-1').decode();
+                       newSubject = None
+                       if newSubject:
+                           try:
+                               newSubject = base64.b64encode(newSubject.encode()).decode()
+                           except UnicodeDecodeError:
+                               try:
+                                   hexa = binascii.hexlify(newSubject)
+                                   print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                   newSubject = base64.b64encode(newSubject)
+                               except UnicodeDecodeError:
+                                   hexa = binascii.hexlify(newSubject)
+                                   print("Could not decode message: binascii.unhexlify(\"%s\")" %hexa)
+                                   raise
 			
 			if newSubject is not None:
 				self.signalInterface.send("group_subjectReceived",(msgId, fromAttribute, author, newSubject, int(attribute_t),  receiptRequested))
