@@ -1175,8 +1175,8 @@ class ReaderThread(threading.Thread):
 					receiptRequested = True;
 
 			bodyNode = messageNode.getChild("body");
-                       newSubject = None
-                       if newSubject:
+			newSubject = None
+			if newSubject:
                            try:
                                newSubject = base64.b64encode(newSubject.encode()).decode()
                            except UnicodeDecodeError:
