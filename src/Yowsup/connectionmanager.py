@@ -1002,6 +1002,8 @@ class ReaderThread(threading.Thread):
 
 		pictureNode = node.getChild("picture")
 		if pictureNode.data is not None:
+                    try:
+			#tmp = self.createTmpFile(pictureNode.data if sys.version_info < (3, 0) else pictureNode.data.encode('latin-1'), "wb")
 			tmp = self.createTmpFile(pictureNode.data.encode('latin-1'), "wb")
 
 			pictureId = int(pictureNode.getAttributeValue('id'))
@@ -1010,6 +1012,8 @@ class ReaderThread(threading.Thread):
 				self.signalInterface.send("group_gotPicture", (jid, pictureId, tmp))
 			except ValueError:
 				self.signalInterface.send("contact_gotProfilePicture", (jid, pictureId, tmp))
+                    except UnicodeDecodeError:
+                        print ("What the hell? parseGetPicture died. Whatever man...")
 
 
 	def parseGetPictureIds(self,node):
