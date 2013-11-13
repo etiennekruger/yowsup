@@ -22,6 +22,7 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 from Yowsup.ConnectionIO.protocoltreenode import ProtocolTreeNode
 from Yowsup.ConnectionIO.ioexceptions import ConnectionClosedException
 from Yowsup.ConnectionIO.connectionengine import ConnectionEngine
+from Yowsup.Common.utilities import Utilities
 
 from Yowsup.Common.debugger import Debugger
 import threading, select, time
@@ -111,6 +112,8 @@ class YowsupConnectionManager:
 		self.methodInterface.registerCallback("message_videoSend",self.sendVideo)
 		self.methodInterface.registerCallback("message_locationSend",self.sendLocation)
 		self.methodInterface.registerCallback("message_vcardSend",self.sendVCard)
+		
+		self.methodInterface.registerCallback("message_broadcast",self.sendBroadcast)
 
 		self.methodInterface.registerCallback("message_ack",self.sendMessageReceipt)
 
@@ -167,6 +170,8 @@ class YowsupConnectionManager:
 		
 		self.methodInterface.registerCallback("auth_login", self.auth )
 		#self.methodInterface.registerCallback("auth_login", self.auth)
+		
+		self.methodInterface.registerCallback("media_requestUpload", self.sendRequestUpload)
 
 
 	def disconnect(self, reason=""):
@@ -235,7 +240,9 @@ class YowsupConnectionManager:
 			yAuth = YowsupAuth(ConnectionEngine())
 			try:
 				self.state = 1
-				connection = yAuth.authenticate(username, password, Constants.domain, Constants.resource)
+				tokenData = Utilities.readToken()
+				resource = tokenData["r"] if tokenData else Constants.tokenData["r"]
+				connection = yAuth.authenticate(username, password, Constants.domain, resource)
 			except socket.gaierror:
 				self._d("DNS ERROR")
 				self.readerThread.sendDisconnected("dns")
@@ -427,7 +434,7 @@ class YowsupConnectionManager:
 	def sendMessage(fn):
 			def wrapped(self, *args):
 				node = fn(self, *args)
-				jid = args[0]
+				jid = "broadcast" if type(args[0]) == list else args[0]
 				messageNode = self.getMessageNode(jid, node)
 				
 				self._writeNode(messageNode);
@@ -477,7 +484,15 @@ class YowsupConnectionManager:
 		
 		cardNode = ProtocolTreeNode("vcard",{"name":name},None,data);
 		return ProtocolTreeNode("media", {"xmlns":"urn:xmpp:whatsapp:mms","type":"vcard"},[cardNode])
-
+	
+	@sendMessage
+	def sendBroadcast(self, jids, content):
+		
+		broadcastNode = ProtocolTreeNode("broadcast", None, [ProtocolTreeNode("to", {"jid": jid}) for jid in jids])
+		
+		messageNode = ProtocolTreeNode("body",None,None,content);
+		
+		return [broadcastNode, messageNode]
 
 	def sendClientConfig(self,sound,pushID,preview,platform):
 		idx = self.makeId("config_");
@@ -487,6 +502,7 @@ class YowsupConnectionManager:
 		self._writeNode(iqNode);
 
 
+	# gtype should be either "participating" or "owning"
 	def sendGetGroups(self,gtype):
 		self._d("getting groups %s"%(gtype))
 		idx = self.makeId("get_groups_")
@@ -639,27 +655,45 @@ class YowsupConnectionManager:
 		self._writeNode(iqNode)
 
 	
+	def sendRequestUpload(self, b64Hash, t, size, b64OrigHash = None):
+		idx = self.makeId("upload_")
+		
+		self.readerThread.requests[idx] = lambda iqresnode: self.readerThread.parseRequestUpload(iqresnode, b64Hash)
 
+		if type(size) is not str:
+			size = str(size)
+
+		attribs = {"xmlns":"w:m","hash":b64Hash, "type":t, "size":size}
+
+		if b64OrigHash:
+			attribs["orighash"] = b64OrigHash
+
+		mediaNode = ProtocolTreeNode("media", attribs)
+		iqNode = ProtocolTreeNode("iq",{"id":idx,"to":"s.whatsapp.net","type":"set"},[mediaNode])
+		
+		
+		self._writeNode(iqNode)
 
 	def getMessageNode(self, jid, child):
 			requestNode = None;
 			serverNode = ProtocolTreeNode("server",None);
 			xNode = ProtocolTreeNode("x",{"xmlns":"jabber:x:event"},[serverNode]);
 			childCount = (0 if requestNode is None else 1) +2;
-			messageChildren = [None]*childCount;
-			i = 0;
+			messageChildren = []#[None]*childCount;
 			if requestNode is not None:
-				messageChildren[i] = requestNode;
-				i+=1;
+				messageChildren.append(requestNode);
 			#System.currentTimeMillis() / 1000L + "-"+1
-			messageChildren[i] = xNode;
-			i+=1;
-			messageChildren[i]= child;
-			i+=1;
-
+			messageChildren.append(xNode)
+			
+			if type(child) == list:
+				messageChildren.extend(child)
+			else:
+				messageChildren.append(child)
+				
 			msgId = str(int(time.time()))+"-"+ str(self.currKeyId)
+			
 			messageNode = ProtocolTreeNode("message",{"to":jid,"type":"chat","id":msgId},messageChildren)
-
+			
 			self.currKeyId += 1
 
 
@@ -890,7 +924,7 @@ class ReaderThread(threading.Thread):
 		for groupNode in children:
 			jid = groupNode.getAttributeValue("id") + "@g.us"
 			owner = groupNode.getAttributeValue("owner")
-			subject = groupNode.getAttributeValue("subject").encode('latin-1').decode();
+			subject = groupNode.getAttributeValue("subject") if sys.version_info < (3, 0) else groupNode.getAttributeValue("subject").encode('latin-1').decode() 
 			subjectT = groupNode.getAttributeValue("s_t")
 			subjectOwner = groupNode.getAttributeValue("s_o")
 			creation = groupNode.getAttributeValue("creation")
@@ -907,7 +941,7 @@ class ReaderThread(threading.Thread):
 			ProtocolTreeNode.require(groupNode,"group")
 			#gid = groupNode.getAttributeValue("id")
 			owner = groupNode.getAttributeValue("owner")
-			subject = groupNode.getAttributeValue("subject").encode('latin-1').decode();
+			subject = groupNode.getAttributeValue("subject") if sys.version_info < (3, 0) else groupNode.getAttributeValue("subject").encode('latin-1').decode();
 			subjectT = groupNode.getAttributeValue("s_t")
 			subjectOwner = groupNode.getAttributeValue("s_o")
 			creation = groupNode.getAttributeValue("creation")
@@ -1048,6 +1082,39 @@ class ReaderThread(threading.Thread):
 				pictureId = int(picNode.getAttributeValue("id"))
 				self.signalInterface.send("profile_setPictureSuccess", (pictureId,))
 	
+	
+	def parseRequestUpload(self, iqNode, _hash):
+
+		mediaNode = iqNode.getChild("media")
+		
+		
+		if mediaNode:
+
+			url = mediaNode.getAttributeValue("url")
+			
+			resumeFrom = mediaNode.getAttributeValue("resume")
+			
+			if not resumeFrom:
+				resumeFrom = 0
+	
+			if url:
+				self.signalInterface.send("media_uploadRequestSuccess", (_hash, url, resumeFrom))
+			else:
+				self.signalInterface.send("media_uploadRequestFailed", (_hash,))
+		else:
+			duplicateNode = iqNode.getChild("duplicate")
+			
+			if duplicateNode:
+				
+				url = duplicateNode.getAttributeValue("url")
+				
+				
+				self.signalInterface.send("media_uploadRequestDuplicate", (_hash, url))
+		
+			else:
+				self.signalInterface.send("media_uploadRequestFailed", (_hash,))
+				
+
 	def parseMessage(self,messageNode):
 
 
@@ -1060,6 +1127,7 @@ class ReaderThread(threading.Thread):
 #		timestamp =long(time.time()*1000) if not offlineNode else int(messageNode.getAttributeValue("t"))*1000;
 		timestamp =int(messageNode.getAttributeValue("t"))
 		isGroup = False
+		isBroadcast = False
 		
 		if newSubject.find("New version of WhatsApp Messenger is now available")>-1:
 			self._d("Rejecting whatsapp server message")
@@ -1179,6 +1247,7 @@ class ReaderThread(threading.Thread):
 					receiptRequested = True;
 
 			bodyNode = messageNode.getChild("body");
+			#newSubject = None if bodyNode is None else (bodyNode.data if sys.version_info < (3, 0) else bodyNode.data.encode('latin-1').decode());
 			newSubject = None
 			if newSubject:
                            try:
@@ -1203,7 +1272,10 @@ class ReaderThread(threading.Thread):
 			for childNode in messageChildren:
 				if ProtocolTreeNode.tagEquals(childNode,"request"):
 					wantsReceipt = True;
-				if ProtocolTreeNode.tagEquals(childNode,"composing"):
+				
+				if ProtocolTreeNode.tagEquals(childNode,"broadcast"):
+					isBroadcast = True
+				elif ProtocolTreeNode.tagEquals(childNode,"composing"):
 						self.signalInterface.send("contact_typing", (fromAttribute,))
 				elif ProtocolTreeNode.tagEquals(childNode,"paused"):
 						self.signalInterface.send("contact_paused",(fromAttribute,))
@@ -1223,6 +1295,7 @@ class ReaderThread(threading.Thread):
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
+                                                    #mediaPreview = base64.b64encode(mediaPreview) if sys.version_info < (3, 0) else base64.b64encode(mediaPreview.encode('latin-1')).decode()
                                                     try:
                                                         mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
                                                     except UnicodeDecodeError:
@@ -1238,12 +1311,13 @@ class ReaderThread(threading.Thread):
 						if isGroup:
 							self.signalInterface.send("group_imageReceived", (msgId, fromAttribute, author, mediaPreview, mediaUrl, mediaSize, wantsReceipt))
 						else:
-							self.signalInterface.send("image_received", (msgId, fromAttribute, mediaPreview, mediaUrl, mediaSize,  wantsReceipt))
+							self.signalInterface.send("image_received", (msgId, fromAttribute, mediaPreview, mediaUrl, mediaSize,  wantsReceipt, isBroadcast))
 
 					elif mediaType == "video":
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
+                                                    #mediaPreview = base64.b64encode(mediaPreview) if sys.version_info < (3, 0) else base64.b64encode(mediaPreview.encode('latin-1')).decode()
                                                     try:
                                                         mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
                                                     except UnicodeDecodeError:
@@ -1259,7 +1333,7 @@ class ReaderThread(threading.Thread):
 						if isGroup:
 							self.signalInterface.send("group_videoReceived", (msgId, fromAttribute, author, mediaPreview, mediaUrl, mediaSize, wantsReceipt))
 						else:
-							self.signalInterface.send("video_received", (msgId, fromAttribute, mediaPreview, mediaUrl, mediaSize, wantsReceipt))
+							self.signalInterface.send("video_received", (msgId, fromAttribute, mediaPreview, mediaUrl, mediaSize, wantsReceipt, isBroadcast))
 
 					elif mediaType == "audio":
 						mediaPreview = messageNode.getChild("media").data
@@ -1267,19 +1341,20 @@ class ReaderThread(threading.Thread):
 						if isGroup:
 							self.signalInterface.send("group_audioReceived", (msgId, fromAttribute, author, mediaUrl, mediaSize, wantsReceipt))
 						else:
-							self.signalInterface.send("audio_received", (msgId, fromAttribute, mediaUrl, mediaSize, wantsReceipt))
+							self.signalInterface.send("audio_received", (msgId, fromAttribute, mediaUrl, mediaSize, wantsReceipt, isBroadcast))
 
 					elif mediaType == "location":
 						mlatitude = messageNode.getChild("media").getAttributeValue("latitude")
 						mlongitude = messageNode.getChild("media").getAttributeValue("longitude")
 						name = messageNode.getChild("media").getAttributeValue("name")
 						
-						if name:
+						if name and not sys.version_info < (3, 0):
 							name = name.encode('latin-1').decode()
 						
 						mediaPreview = messageNode.getChild("media").data
 						
 						if encoding == "raw" and mediaPreview:
+							#mediaPreview = base64.b64encode(mediaPreview) if sys.version_info < (3, 0) else base64.b64encode(mediaPreview.encode('latin-1')).decode()
                                                         try:
                                                             mediaPreview = base64.b64encode(mediaPreview.encode()).decode()
                                                         except UnicodeDecodeError:
@@ -1295,7 +1370,7 @@ class ReaderThread(threading.Thread):
 						if isGroup:
 							self.signalInterface.send("group_locationReceived", (msgId, fromAttribute, author, name or "", mediaPreview, mlatitude, mlongitude, wantsReceipt))
 						else:
-							self.signalInterface.send("location_received", (msgId, fromAttribute, name or "", mediaPreview, mlatitude, mlongitude, wantsReceipt))
+							self.signalInterface.send("location_received", (msgId, fromAttribute, name or "", mediaPreview, mlatitude, mlongitude, wantsReceipt, isBroadcast))
 		
 					elif mediaType =="vcard":
 						#return
@@ -1303,7 +1378,7 @@ class ReaderThread(threading.Thread):
 						vcardData = messageNode.getChild("media").getChild("vcard").toString()
 						vcardName = messageNode.getChild("media").getChild("vcard").getAttributeValue("name")
 						
-						if vcardName:
+						if vcardName and not sys.version_info < (3, 0):
 							vcardName = vcardName.encode('latin-1').decode()
 						
 						if vcardData is not None:
@@ -1314,7 +1389,7 @@ class ReaderThread(threading.Thread):
 							if isGroup:
 								self.signalInterface.send("group_vcardReceived", (msgId, fromAttribute, author, vcardName, vcardData, wantsReceipt))
 							else:
-								self.signalInterface.send("vcard_received", (msgId, fromAttribute, vcardName, vcardData, wantsReceipt))
+								self.signalInterface.send("vcard_received", (msgId, fromAttribute, vcardName, vcardData, wantsReceipt, isBroadcast))
 							
 					else:
 						self._d("Unknown media type")
@@ -1358,7 +1433,12 @@ class ReaderThread(threading.Thread):
 					elif ProtocolTreeNode.tagEquals(childNode,"x"):
 						xmlns = childNode.getAttributeValue("xmlns");
 						if "jabber:x:event" == xmlns and msgId is not None:
-							self.signalInterface.send("receipt_messageSent", (fromAttribute, msgId))
+							
+							if fromAttribute == "broadcast":
+								self.signalInterface.send("receipt_broadcastSent", (msgId,))
+							else:
+								self.signalInterface.send("receipt_messageSent", (fromAttribute, msgId))
+
 						elif "jabber:x:delay" == xmlns:
 							continue; #@@TODO FORCED CONTINUE, WHAT SHOULD I DO HERE? #wtf?
 							stamp_str = childNode.getAttributeValue("stamp");
@@ -1381,12 +1461,13 @@ class ReaderThread(threading.Thread):
 
 
 			if msgData:
+				#msgData = msgData if sys.version_info < (3, 0) else msgData.encode('latin-1').decode()
 				msgData = msgData.decode("utf-8")
 				if isGroup:
 					self.signalInterface.send("group_messageReceived", (msgId, fromAttribute, author, msgData, timestamp, wantsReceipt, pushName))
 
 				else:
-					self.signalInterface.send("message_received", (msgId, fromAttribute, msgData, timestamp, wantsReceipt, pushName))
+					self.signalInterface.send("message_received", (msgId, fromAttribute, msgData, timestamp, wantsReceipt, pushName, isBroadcast))
 
 				##@@TODO FROM CLIENT
 				'''if conversation.type == "group":
